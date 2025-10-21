@@ -9,6 +9,8 @@ public class RunningNormalizer
 
     private const float epsilon = 1e-6f;
 
+    public bool clamp01 = true;
+
     public void Update(float v) 
     {
         if(float.IsNaN(v) || float.IsInfinity(v)) return;
@@ -22,7 +24,7 @@ public class RunningNormalizer
             // not yet primed; fallback
             return clamp01 ? Mathf.Clamp01(v) : v;
         }
-        float denom = Mathf.Max(max - min, EPS);
+        float denom = Mathf.Max(max - min, epsilon);
         float t = (v - min) / denom;
         return clamp01 ? Mathf.Clamp01(t) : t;
     }

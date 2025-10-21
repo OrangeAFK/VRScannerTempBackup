@@ -6,8 +6,7 @@ public class MeshSampler : MonoBehaviour
     [Header("Sampling Settings")]
     public float sampleDensity = 1f;           // points per unit area
     public float connectionRadiusFactor = 0.05f; // fraction of mesh size
-    public bool visualizePoints = true;
-    public float gizmoSize = 0.01f;
+    public int maxSamples = 200;
 
     [HideInInspector] public List<Vector3> sampledPoints;
     private float[] cumulativeAreas;
@@ -53,7 +52,7 @@ public class MeshSampler : MonoBehaviour
             cumulativeAreas[i] = totalArea;
         }
 
-        int numberOfSamples = Mathf.CeilToInt(sampleDensity * totalArea);
+        int numberOfSamples = Mathf.Min(Mathf.CeilToInt(sampleDensity * totalArea), maxSamples);
         sampledPoints = new List<Vector3>(numberOfSamples);
 
         for (int i = 0; i < numberOfSamples; i++)
@@ -118,7 +117,7 @@ public class MeshSampler : MonoBehaviour
 
         float meshSize = mf.sharedMesh.bounds.size.magnitude * transform.lossyScale.magnitude;
         float rMax = meshSize * 0.5f;    // max radius
-        int steps = 20;                  // number of filtration steps
+        int steps = 10;                  // number of filtration steps
 
         // Build distance matrix
         int n = sampledPoints.Count;
@@ -158,13 +157,5 @@ public class MeshSampler : MonoBehaviour
         }
 
         return h1Score;
-    }
-
-
-    void OnDrawGizmosSelected()
-    {
-        if (!visualizePoints || sampledPoints == null) return;
-        Gizmos.color = Color.cyan;
-        foreach (var p in sampledPoints) Gizmos.DrawSphere(p, gizmoSize);
     }
 }

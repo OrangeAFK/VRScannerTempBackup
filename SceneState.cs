@@ -6,10 +6,22 @@ public class SceneState : ScriptableObject
 {
     public List<PlacedObject> objects = new List<PlacedObject>();
     public List<PlacedLight> lights = new List<PlacedLight>();
+
+    // raw scores pre-normalization
     public float holesDifficulty;
     public float lightingDifficulty;
     public float occlusionDifficulty;
 
+    public static readonly Bounds roomBounds = new Bounds(new Vector3(0f,2f,0f), new Vector3(10f, 4f, 10f));
+
+    public const int minObjects = 4;
+    public const int maxObjects = 25;
+    public const int initObjects = 6;
+
+    public const int minLights = 1;
+    public const int maxLights = 4;
+    public const int initLights = 2;
+    
     // Runtime Initialization
     public static SceneState CreateRandom(List<GameObject> pool)
     {
@@ -17,16 +29,21 @@ public class SceneState : ScriptableObject
         s.objects = new List<PlacedObject>();
         s.lights = new List<PlacedLight>();
 
-        for (int i = 0; i < 5; i++)
+        // initialize objects
+        for (int i = 0; i < SceneState.initObjects; i++)
         {
             var prefab = pool[Random.Range(0, pool.Count)];
-            var pos = new Vector3(Random.Range(-2f, 2f), 0, Random.Range(-2f, 2f));
+            var pos = new Vector3(Random.Range(SceneState.roomBounds.min.x, SceneState.roomBounds.max.x), 0f, Random.Range(SceneState.roomBounds.min.z, SceneState.roomBounds.max.z));
             s.objects.Add(new PlacedObject(prefab, pos, Quaternion.Euler(0, Random.Range(0, 360f), 0)));
         }
 
-        for (int i = 0; i < 2; i++)
+        // initialize lights
+        for (int i = 0; i < SceneState.initLights; i++)
         {
-            var pos = new Vector3(Random.Range(-3f, 3f), Random.Range(2f, 4f), Random.Range(-3f, 3f));
+            var pos = new Vector3(Random.Range(SceneState.roomBounds.min.x, SceneState.roomBounds.max.x),
+                                  Random.Range(SceneState.roomBounds.min.y + 0.5f, SceneState.roomBounds.max.y - 0.5f),
+                                  Random.Range(SceneState.roomBounds.min.z, SceneState.roomBounds.max.z));
+
             s.lights.Add(new PlacedLight(pos, Random.Range(0.5f, 2f)));
         }
 
@@ -36,6 +53,8 @@ public class SceneState : ScriptableObject
 
     public SceneState GetProposal(List<GameObject> pool)
     {
+        Debug.Log("1");
+        // deep copy of strucsts
         SceneState copy = ScriptableObject.CreateInstance<SceneState>();
         copy.objects = new List<PlacedObject>(this.objects);
         copy.lights = new List<PlacedLight>(this.lights);
@@ -43,11 +62,178 @@ public class SceneState : ScriptableObject
         copy.lightingDifficulty = this.lightingDifficulty;
         copy.occlusionDifficulty = this.occlusionDifficulty;
 
-        if (Random.value < 0.5f) copy.MutateObject(pool);
+        Debug.Log("2");
+        float r = Random.value;
+        if (r < 0.2f) {
+            copy.AddRandomObject(pool);
+        }
+        else if (r < 0.35f) copy.RemoveRandomObject();
+        else if (r < 0.65f) copy.MutateObject(pool);
+        else if (r < 0.85f) copy.SwapTwoObjects();
         else copy.MutateLight();
 
+        Debug.Log("3");
+        if(HardRejectProposal(copy)) {
+            Debug.Log("HR inside GetProposal");
+            Destroy(copy);
+            return null; // null condition indicates reject
+        }
+        Debug.Log("4");
         copy.EvaluateAll();
+        Debug.Log("5");
+        Debug.Log("Returning proposal from GetProposal: " + copy);
         return copy;
+    }
+
+    // structural mutation
+    public void AddRandomObject(List<GameObject> pool)
+    {
+        if (objects.Count >= SceneState.maxObjects) return;
+        var prefab = pool[Random.Range(0, pool.Count)];
+        Vector3 pos = new Vector3(Random.Range(SceneState.roomBounds.min.x, SceneState.roomBounds.max.x),
+                                  0f,
+                                  Random.Range(SceneState.roomBounds.min.z, SceneState.roomBounds.max.z));
+        Quaternion rot = Quaternion.Euler(0, Random.Range(0f, 360f), 0f);
+        objects.Add(new PlacedObject(prefab, pos, rot));
+    }
+
+    public void RemoveRandomObject() {
+        if(objects.Count <= SceneState.minObjects) return;
+        int idx = Random.Range(0, objects.Count);
+        objects.RemoveAt(idx);
+    }
+
+    public void SwapTwoObjects() {
+        if(objects.Count < 2) return;
+        int a = Random.Range(0, objects.Count);
+        int b = Random.Range(0, objects.Count - 1);
+        if(b >= a) b++;
+        var tmp = objects[a];
+        objects[a] = objects[b];
+        objects[b] = tmp;
+    }
+
+    public void MutateObject(List<GameObject> pool) {
+        if(objects.Count==0) return;
+        int idx = Random.Range(0, objects.Count);
+        var obj = objects[idx];
+
+        float r = Random.value;
+        if(r < 0.4f) {
+            // nudge position inside room
+            Vector3 nudge = new Vector3(Random.Range(-1f, 1f), 0, Random.Range(-1f, 1f));
+            Vector3 newPos = obj.position + nudge;
+            // clamp to room
+            newPos.x = Mathf.Clamp(newPos.x, SceneState.roomBounds.min.x, SceneState.roomBounds.max.x);
+            newPos.z = Mathf.Clamp(newPos.z, SceneState.roomBounds.min.z, SceneState.roomBounds.max.z);
+            obj.position = newPos;
+        }
+        else if(r < 0.65f) {
+            obj.rotation = Quaternion.Euler(0, Random.Range(0f, 360f), 0);
+        }
+        else {
+            obj.prefab = pool[Random.Range(0, pool.Count)];
+        }
+        objects[idx] = obj;
+    }
+
+    public void MutateLight()
+    {
+        if(lights.Count==0) return;
+        int idx = Random.Range(0, lights.Count);
+        var light = lights[idx];
+        // nudge position and clamp
+        Vector3 nudge = new Vector3(Random.Range(-1f, 1f), Random.Range(-0.5f, 0.5f), Random.Range(-1f, 1f));
+        Vector3 newPos = light.position + nudge;
+        newPos.x = Mathf.Clamp(newPos.x, SceneState.roomBounds.min.x, SceneState.roomBounds.max.x);
+        newPos.y = Mathf.Clamp(newPos.y, SceneState.roomBounds.min.y + 0.5f, SceneState.roomBounds.max.y - 0.5f);
+        newPos.z = Mathf.Clamp(newPos.z, SceneState.roomBounds.min.z, SceneState.roomBounds.max.z);
+        
+        light.position = newPos;
+        light.intensity = Mathf.Clamp(light.intensity + Random.Range(-0.2f, 0.2f), 0.05f, 5f);
+        lights[idx] = light;
+    }
+
+    // fast hard reject test
+    private bool HardRejectProposal(SceneState s)
+    {
+        // object and light positions should be clamped, but we'll still check for it here in case 
+        // that it has to be modified down the line.
+
+        // object count or object position out of bounds
+        // TODO: change so that it object position AABB must be fully inside the room bounds, once object placement position is set with respect to prefab dimensions
+        if(s.objects.Count < SceneState.minObjects || s.objects.Count > SceneState.maxObjects) {
+            Debug.Log($"[HardReject] Object count out of range: {s.objects.Count}");
+            return true;
+        }
+        foreach(var o in s.objects) {
+            Bounds b = GetWorldBounds(o);
+            if(!SceneState.roomBounds.Intersects(b)) {
+                Debug.Log($"HardReject: Object {o.prefab?.name ?? "?"} out of room bounds {b.center}");
+                return true;
+            }
+        }
+
+        // pairwise intersection
+        for (int i = 0; i < s.objects.Count; i++)
+        {
+            var bi = GetWorldBounds(s.objects[i]);
+            for (int j = i + 1; j < s.objects.Count; j++)
+            {
+                var bj = GetWorldBounds(s.objects[j]);
+                if (bi.Intersects(bj))
+                {
+                    // TODO: allow slight intersection if small tolerance? here reject
+                    Debug.Log(
+                        $"HardReject: Collision between {s.objects[i].prefab?.name ?? "?"} and {s.objects[j].prefab?.name ?? "?"}"
+                    );
+                    return true;
+                }
+            }
+        }
+
+        // lights out of bounds
+        foreach(var light in s.lights)
+        {
+            if(!SceneState.roomBounds.Contains(light.position)) {
+                Debug.Log($"HardReject: Light out of bounds at {light.position}");
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // get AABB 
+    private Bounds GetWorldBounds(PlacedObject o) {
+        // TODO: raise error here
+        if(o.prefab==null) return new Bounds(o.position, Vector3.one*0.5f);
+
+        // will use meshfilter instead of renderer to generate AABB since obj 
+        // isn't instantiated until the final scene is drawn
+        var mf = o.prefab.GetComponentInChildren<MeshFilter>();
+        if(mf==null || mf.sharedMesh==null) {
+            // raise error if no meshfilter
+            throw new System.InvalidOperationException($"PlacedObject '{o.prefab.name}' has no MeshFilter or sharedMesh!");
+        }
+
+        Bounds meshB = mf.sharedMesh.bounds;
+        Vector3[] corners = new Vector3[8];
+        Vector3 ext = meshB.extents;
+        Vector3 c = meshB.center;
+        int cornerIdx = 0;
+        for (int xi = -1; xi <= 1; xi += 2)
+        for (int yi = -1; yi <= 1; yi += 2)
+        for (int zi = -1; zi <= 1; zi += 2)
+        {
+            Vector3 localCorner = c + Vector3.Scale(ext, new Vector3(xi, yi, zi));
+            Vector3 worldCorner = o.rotation * localCorner + o.position;
+            corners[cornerIdx++] = worldCorner;
+        }
+
+        Bounds worldAABB = new Bounds(corners[0], Vector3.zero);
+        for (int i = 1; i < corners.Length; i++) worldAABB.Encapsulate(corners[i]);
+        return worldAABB;
     }
 
     public void EvaluateAll()
@@ -57,9 +243,12 @@ public class SceneState : ScriptableObject
         occlusionDifficulty = EvaluateOcclusion();
     }
 
+    // TODO: make sure the evaluation functions are well-formed
+
     float EvaluateHoles()
     {
         float totalH1 = 0f;
+        int count = 0;
 
         foreach (var o in objects)
         {
@@ -72,17 +261,17 @@ public class SceneState : ScriptableObject
 
             sampler.SampleMesh(); // always sample fresh
             totalH1 += sampler.ComputeH1Score();
-
+            count++;
             // Clean up the temporary instance
-            GameObject.DestroyImmediate(instance);
+            Destroy(instance);
         }
-
-        return totalH1;
+        return (count==0) ? 0f : totalH1/count; // mean H1 score 
     }
 
     float EvaluateLighting()
     {
         float totalScore = 0f;
+        int count = 0;
 
         foreach (var o in objects)
         {
@@ -94,7 +283,7 @@ public class SceneState : ScriptableObject
             MeshFilter mf = MeshSampler.FindMeshFilter(instance); //instance.GetComponent<MeshFilter>() ?? instance.GetComponentInChildren<MeshFilter>(true);
             if (mf == null || mf.sharedMesh == null) {
                 string objName = instance.name;
-                GameObject.DestroyImmediate(instance);
+                Destroy(instance);
                 throw new System.InvalidOperationException($"{objName} has no MeshFilter or mesh!");
             }
 
@@ -123,16 +312,17 @@ public class SceneState : ScriptableObject
 
             objectScore /= Mathf.Max(1, vertices.Length);
             totalScore += objectScore;
-
-            GameObject.DestroyImmediate(instance);
+            count++;
+            Destroy(instance);
         }
 
-        return totalScore;
+        return (count==0) ? 0f : totalScore/count;
     }
 
     float EvaluateOcclusion()
     {
         float totalOcclusion = 0f;
+        int count = 0;
 
         foreach (var o in objects)
         {
@@ -149,7 +339,7 @@ public class SceneState : ScriptableObject
             var points = sampler.sampledPoints;
             if (points == null || points.Count == 0)
             {
-                GameObject.DestroyImmediate(instance);
+                Destroy(instance);
                 continue;
             }
 
@@ -176,11 +366,11 @@ public class SceneState : ScriptableObject
 
             objectOcclusion /= points.Count;
             totalOcclusion += objectOcclusion;
-
-            GameObject.DestroyImmediate(instance);
+            count++;
+            Destroy(instance);
         }
 
-        return totalOcclusion;
+        return (count==0) ? 0f : totalOcclusion/count;
     }
 
 
@@ -191,7 +381,7 @@ public class SceneState : ScriptableObject
 
     public void Apply(Transform parent)
     {
-        foreach (Transform c in parent) GameObject.Destroy(c.gameObject);
+        foreach (Transform c in parent) Destroy(c.gameObject);
         foreach (var o in objects)
             GameObject.Instantiate(o.prefab, o.position, o.rotation, parent);
 
@@ -204,30 +394,6 @@ public class SceneState : ScriptableObject
             go.transform.SetParent(parent);
             go.transform.localPosition = l.position;
         }
-    }
-
-    void MutateObject(List<GameObject> pool)
-    {
-        if (objects.Count == 0) return;
-        int index = Random.Range(0, objects.Count);
-        var obj = objects[index];
-
-        if (Random.value < 0.5f)
-            obj.position += new Vector3(Random.Range(-1f,1f), 0, Random.Range(-1f,1f));
-        else
-            obj.prefab = pool[Random.Range(0, pool.Count)];
-
-        objects[index] = obj;
-    }
-
-    void MutateLight()
-    {
-        if (lights.Count == 0) return;
-        int index = Random.Range(0, lights.Count);
-        var light = lights[index];
-        light.position += new Vector3(Random.Range(-1f,1f), Random.Range(-0.5f,0.5f), Random.Range(-1f,1f));
-        light.intensity = Mathf.Clamp(light.intensity + Random.Range(-0.2f, 0.2f), 0.1f, 5f);
-        lights[index] = light;
     }
 }
 
