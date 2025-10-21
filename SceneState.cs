@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
+using System.Linq;
 
 public class SceneState : ScriptableObject
 {
@@ -134,16 +135,9 @@ public class SceneState : ScriptableObject
                 }
 
                 // Penalize overexposed or underexposed samples
-                if (totalLight > saturationThreshold)
-                {
-                    float excess = totalLight - saturationThreshold;
-                    objPenalty += excess * excess;
-                }
-                else if (totalLight < darknessThreshold)
-                {
-                    float deficit = darknessThreshold - totalLight;
-                    objPenalty += deficit * deficit;
-                }
+                float diff = Mathf.Max(0, totalLight - saturationThreshold) + Mathf.Max(0, darknessThreshold - totalLight);
+                objPenalty += diff * diff;
+
             }
             penalties.Add(objPenalty / Mathf.Max(1, sampleCount));
         }
@@ -154,60 +148,41 @@ public class SceneState : ScriptableObject
 
     float EvaluateOcclusion()
     {
-        // simple values chosen part arbitrarily
-        int sampleCount = maxSamples;
         int rayCount = 8;
         float alpha = 2f;
         float totalVisibility = 0f;
         int totalSamples = 0;
 
-        foreach (var o in objects)
+        foreach (var obj in objects)
         {
-            if (o.prefab == null) continue;
+            if (obj == null) continue;
 
-            // Instantiate temporary object
-            GameObject instance = GameObject.Instantiate(o.prefab, o.position, o.rotation);
+            MeshFilter mf = obj.GetComponent<MeshFilter>();
+            if (mf == null || mf.sharedMesh == null) continue;
 
-            MeshSampler sampler = instance.GetComponent<MeshSampler>();
-            if (sampler == null)
-                sampler = instance.AddComponent<MeshSampler>();
+            Mesh mesh = mf.sharedMesh;
+            var verts = mesh.vertices;
+            var normals = mesh.normals;
 
-            sampler.SampleMesh();
-            var points = sampler.sampledPoints;
-            if (points == null || points.Count == 0)
+            int sampleCount = Mathf.Min(verts.Length, maxSamples);
+            for (int i = 0; i < sampleCount; i++)
             {
-                Destroy(instance);
-                continue;
-            }
+                int idx = Random.Range(0, verts.Length);
+                Vector3 worldPos = obj.transform.TransformPoint(verts[idx]);
+                Vector3 worldNormal = obj.transform.TransformDirection(normals[idx]);
 
-            float objectOcclusion = 0f;
-
-            foreach (var localPoint in points)
-            {
-                MeshFilter mf = obj.GetComponent<MeshFilter>();
-                if (mf == null || mf.sharedMesh == null) continue;
-                Mesh mesh = mf.sharedMesh;
-                var verts = mesh.vertices;
-                var normals = mesh.normals;
-
-                for (int i = 0; i < sampleCount; i++)
+                float vis = 0f;
+                for (int j = 0; j < rayCount; j++)
                 {
-                    int idx = Random.Range(0, verts.Length);
-                    Vector3 worldPos = obj.transform.TransformPoint(verts[idx]);
-                    Vector3 worldNormal = obj.transform.TransformDirection(normals[idx]);
-
-                    float vis = 0f;
-                    for (int j = 0; j < rayCount; j++)
-                    {
-                        Vector3 dir = RandomHemisphereDirection(worldNormal);
-                        if (Physics.Raycast(worldPos + dir * 0.001f, dir, out RaycastHit hit, 1f))
-                            vis += Mathf.Exp(-alpha * hit.distance);
-                        else
-                            vis += 1f;
-                    }
-                    totalVisibility += vis / rayCount;
-                    totalSamples++;
+                    Vector3 dir = RandomHemisphereDirection(worldNormal);
+                    if (Physics.Raycast(worldPos + dir * 0.001f, dir, out RaycastHit hit, 1f))
+                        vis += Mathf.Exp(-alpha * hit.distance);
+                    else
+                        vis += 1f;
                 }
+
+                totalVisibility += vis / rayCount;
+                totalSamples++;
             }
         }
 
@@ -216,12 +191,13 @@ public class SceneState : ScriptableObject
         return 1f - meanVis;
     }
 
+
     Vector3 RandomHemisphereDirection(Vector3 normal)
     {
         Vector3 dir = Random.onUnitSphere;
-        if (Vector3.Dot(dir, normal) < 0) dir = -dir;
-        return dir;
+        return Vector3.Dot(dir, normal) < 0 ? -dir : dir;
     }
+
 
     float EvaluateIntersection() {
         float penalty = 0f;
@@ -229,7 +205,7 @@ public class SceneState : ScriptableObject
             Collider a = objects[i].GetComponent<Collider>();
             if(a == null) continue;
             for(int j = i + 1; j < objects.Count; j++) {
-                Collider b = objects[i].GetComponent<Collider>();
+                Collider b = objects[j].GetComponent<Collider>();
                 if(b == null) continue;
                 if(a.bounds.Intersects(b.bounds)) {
                     float overlap = (a.bounds.size.magnitude + b.bounds.size.magnitude) - Vector3.Distance(a.bounds.center, b.bounds.center);
@@ -254,7 +230,7 @@ public class SceneState : ScriptableObject
     }
 
     float EvaluateCount() {
-        int diff = objects.Count - targetObjectCount;
+        int diff = objects.Count - targetObjects;
         return diff * diff;
     }
 }
