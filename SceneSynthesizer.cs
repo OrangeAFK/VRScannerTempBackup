@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
 
+// TODO: create random scene (ideally starting with biased number of objects) and bias the running normalizers
+// create mutation states
+
 public class SceneSynthesizer : MonoBehaviour
 {
     public List<GameObject> objectPrefabs;
@@ -26,7 +29,7 @@ public class SceneSynthesizer : MonoBehaviour
     [Header("Proposal Settings")]
     public int maxObjects = 25;
     public int minObjects = 4;
-    public int lights = 5;
+    public int numLights = 5;
 
     private SceneState currentState;
     private float currentCost;
@@ -34,25 +37,45 @@ public class SceneSynthesizer : MonoBehaviour
     private int iteration = 0;
     private bool optimizationComplete = false;
 
-    private RunningNormalizer holesNormalizer = new RunningNormalizer();
-    private RunningNormalizer lightNormalizer = new RunningNormalizer();
-    private RunningNormalizer occNormalizer = new RunningNormalizer();
-
     void Start()
     {
-        currentState = CreateRandomState();
-        currentCost = ComputeCost(currentState);
-        // prime the normalizers with some random samples
-        for (int i = 0; i < 5; i++)
+        int targetObjects = Mathf.RoundToInt(Mathf.Lerp(minObjects, maxObjects, occlusionDifficulty / 10f));
+
+        // create random in-bounds initialization state
+        currentState = ScriptableObject.CreateInstance<SceneState>();
+        currentState.targetObjects = targetObjects;
+        // initialize objects
+        currentState.objects = new List<GameObject>();
+        for (int i = 0; i < targetObjects; i++)
         {
-            var tmp = CreateRandomState(objectPrefabs);
-            tmp.EvaluateAll();
-            holesNormalizer.Update(tmp.holesDifficulty);
-            lightNormalizer.Update(tmp.lightingDifficulty);
-            occNormalizer.Update(tmp.occlusionDifficulty);
-            Destroy(tmp);
+            var prefab = objectPrefabs[Random.Range(0, objectPrefabs.Count)];
+            var obj = Instantiate(prefab);
+            obj.transform.position = new Vector3(
+                Random.Range(SceneState.roomBounds.min.x, SceneState.roomBounds.max.x),
+                0f,
+                Random.Range(SceneState.roomBounds.min.z, SceneState.roomBounds.max.z)
+            );
+            obj.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
+            currentState.objects.Add(obj);
+        }
+        // initialize lights
+        currentState.lights = new List<PlacedLight>();
+        for (int i = 0; i < numLights; i++)
+        {
+            PlacedLight light = new PlacedLight(
+                new Vector3(
+                    Random.Range(SceneState.roomBounds.min.x, SceneState.roomBounds.max.x),
+                    Random.Range(SceneState.roomBounds.min.y + 0.5f, SceneState.roomBounds.max.y - 0.5f),
+                    Random.Range(SceneState.roomBounds.min.z, SceneState.roomBounds.max.z)
+                ),
+                Random.Range(0.5f, 2.0f) // reasonable intensity
+            );
+            currentState.lights.Add(light);
         }
 
+        currentState.EvaluateAll();
+        
+        currentCost = ComputeCost(currentState);
         StartCoroutine(OptimizerCoroutine());
     }
 
@@ -72,34 +95,12 @@ public class SceneSynthesizer : MonoBehaviour
         {
             Debug.Log("Reached max iterations.");
         }
-        currentState.Apply(this.transform);
-    }
-
-    SceneState CreateRandomState() {
-        
     }
 
     public void OptimizeStep()
     {
         // Create proposal
-        var proposal = currentState.GetProposal(objectPrefabs);
-        if(proposal == null)
-        {
-            // hard reject. don't increment iterations or change temperature for invalid states
-            ++hardRejectCount;
-            Debug.Log("hard reject");
-            // TODO: remove once debugged.
-            if(hardRejectCount > 200 && iteration == 0) {
-                Debug.Log("0 Iterations After Rejections. Quitting...");
-                EditorApplication.isPlaying = false;
-            }
-            if(hardRejectCount > 1000) {
-                Debug.Log("Iteration: " + iteration + ", Hard rejects: " + hardRejectCount);
-                EditorApplication.isPlaying = false;
-            }
-            return;
-        }
-
+        var proposal = GenerateProposal(currentState);
         float proposalCost = ComputeCost(proposal);
         float delta = proposalCost - currentCost;
         float alpha = Mathf.Min(1f, Mathf.Exp(-delta / Mathf.Max(temperature, 1e-6f)));
@@ -108,14 +109,14 @@ public class SceneSynthesizer : MonoBehaviour
         if (Random.value < alpha)
         {
             // Destroy the previous state to avoid memory leak
-            ScriptableObject.DestroyImmediate(currentState);
+            ScriptableObject.Destroy(currentState);
             currentState = proposal;
             currentCost = proposalCost;
         }
         else
         {
             // reject
-            ScriptableObject.DestroyImmediate(proposal);
+            ScriptableObject.Destroy(proposal);
         }
 
         temperature *= coolingRate;
@@ -137,6 +138,73 @@ public class SceneSynthesizer : MonoBehaviour
         }
     }
 
+    SceneState GenerateProposal(SceneState baseState) {
+        SceneState copy = ScriptableObject.CreateInstance<SceneState>();
+        copy.objects = new List<GameObject>(baseState.objects);
+        copy.lights = new List<PlacedLight>(baseState.lights);
+        copy.targetObjects = targetObjects;
+
+        float r = Random.value;
+        if (r < 0.2f) AddRandomObject(copy);
+        else if (r < 0.35f) RemoveRandomObject(copy);
+        else if (r < 0.65f) MutateObject(copy);
+        else if (r < 0.85f) SwapTwoObjects(copy);
+        else MutateLight(copy);
+        
+        copy.EvaluateAll();
+        return copy;
+    }
+
+    void AddRandomObject(SceneState s) {
+        if (s.objects.Count >= SceneState.maxObjects) return;
+        var prefab = objectPrefabs[Random.Range(0, objectPrefabs.Count)];
+        Vector3 pos = new Vector3(Random.Range(SceneState.roomBounds.min.x, SceneState.roomBounds.max.x),
+                                  0f,
+                                  Random.Range(SceneState.roomBounds.min.z, SceneState.roomBounds.max.z));
+        Quaternion rot = Quaternion.Euler(0, Random.Range(0f, 360f), 0);
+        s.objects.Add(new PlacedObject(prefab, pos, rot));
+    }
+
+    void RemoveRandomObject(SceneState s) {
+        if (s.objects.Count <= SceneState.minObjects) return;
+        int idx = Random.Range(0, s.objects.Count);
+        s.objects.RemoveAt(idx);
+    }
+
+    void MutateObject(SceneState s)
+    {
+        if (s.objects.Count == 0) return;
+        int idx = Random.Range(0, s.objects.Count);
+        var obj = s.objects[idx];
+        float r = Random.value;
+
+        if (r < 0.4f)
+        {
+            Vector3 nudge = new Vector3(Random.Range(-1f, 1f), 0, Random.Range(-1f, 1f));
+            Vector3 newPos = obj.position + nudge;
+            newPos.x = Mathf.Clamp(newPos.x, SceneState.roomBounds.min.x, SceneState.roomBounds.max.x);
+            newPos.z = Mathf.Clamp(newPos.z, SceneState.roomBounds.min.z, SceneState.roomBounds.max.z);
+            obj.position = newPos;
+        }
+        else if (r < 0.65f)
+        {
+            obj.rotation = Quaternion.Euler(0, Random.Range(0f, 360f), 0);
+        }
+        else
+        {
+            obj.prefab = objectPrefabs[Random.Range(0, objectPrefabs.Count)];
+        }
+
+        s.objects[idx] = obj;
+    }
+
+    void SwapTwoObjects(SceneState s) {
+
+    }
+
+    void MutateLight(SceneState s) {
+
+    }
 
     float ComputeCost(SceneState s)
     {
@@ -164,10 +232,12 @@ public class SceneSynthesizer : MonoBehaviour
         // ----------------------------
 
 
-        float cost = lambdaHoles*C_h
-             + lambdaLights*C_l
-             + lambdaOcclusion*C_o
-             + lambdaCount*C_c;
+        float cost = lambdaHoles * C_h
+                   + lambdaLighting * C_l
+                   + lambdaOcclusion * C_o
+                   + lambdaCount * C_c
+                   + lambdaIntersection * s.intersectPenalty
+                   + lambdaBounds * s.boundsPenalty;
         return cost;
     }
 
