@@ -17,9 +17,16 @@ public class SceneSynthesizer : MonoBehaviour
 
     [Header("Cost Term Weights")]
     public float lambdaHoles = 1f;
-    public float lambdaLights = 1f;
+    public float lambdaLighting = 1f;
     public float lambdaOcclusion = 1f;
     public float lambdaCount = 0.2f;
+    public float lambdaIntersection = 1f;
+    public float lambdaBounds = 0.5f;
+
+    [Header("Proposal Settings")]
+    public int maxObjects = 25;
+    public int minObjects = 4;
+    public int lights = 5;
 
     private SceneState currentState;
     private float currentCost;
@@ -31,24 +38,19 @@ public class SceneSynthesizer : MonoBehaviour
     private RunningNormalizer lightNormalizer = new RunningNormalizer();
     private RunningNormalizer occNormalizer = new RunningNormalizer();
 
-    // TODO: delete post debugging
-    int hardRejectCount = 0;
-
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        currentState = SceneState.CreateRandom(objectPrefabs);
+        currentState = CreateRandomState();
         currentCost = ComputeCost(currentState);
-        currentState.Apply(this.transform);
         // prime the normalizers with some random samples
         for (int i = 0; i < 5; i++)
         {
-            var tmp = SceneState.CreateRandom(objectPrefabs);
+            var tmp = CreateRandomState(objectPrefabs);
             tmp.EvaluateAll();
             holesNormalizer.Update(tmp.holesDifficulty);
             lightNormalizer.Update(tmp.lightingDifficulty);
             occNormalizer.Update(tmp.occlusionDifficulty);
-            ScriptableObject.DestroyImmediate(tmp);
+            Destroy(tmp);
         }
 
         StartCoroutine(OptimizerCoroutine());
@@ -71,6 +73,10 @@ public class SceneSynthesizer : MonoBehaviour
             Debug.Log("Reached max iterations.");
         }
         currentState.Apply(this.transform);
+    }
+
+    SceneState CreateRandomState() {
+        
     }
 
     public void OptimizeStep()
