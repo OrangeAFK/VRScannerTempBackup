@@ -5,7 +5,7 @@ using System.Linq;
 public class SceneState : ScriptableObject
 {
     public List<GameObject> objects;
-    public List<PlacedLight> lights;
+    public List<GameObject> lights;
 
     public float holesDifficulty;
     public float occlusionDifficulty;
@@ -126,9 +126,12 @@ public class SceneState : ScriptableObject
                 Vector3 normal = obj.transform.TransformDirection(normals[idx]);
 
                 float totalLight = 0f;
-                foreach (var light in lights)
+                foreach (var lightObj in lights)
                 {
-                    Vector3 toLight = light.position - pos;
+                    if (lightObj == null) continue;
+                    Light light = lightObj.GetComponent<Light>();
+                    if (light == null) continue;
+                    Vector3 toLight = lightObj.transform.position - pos;
                     float atten = 1f / (1f + toLight.sqrMagnitude);
                     float intensity = light.intensity * Mathf.Max(0, Vector3.Dot(normal, toLight.normalized)) * atten;
                     totalLight += intensity;

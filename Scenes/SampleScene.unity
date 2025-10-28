@@ -256,6 +256,70 @@ MonoBehaviour:
     m_MipBias: 0
     m_VarianceClampScale: 0.9
     m_ContrastAdaptiveSharpening: 0
+--- !u!1 &509809466
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 509809468}
+  - component: {fileID: 509809467}
+  m_Layer: 0
+  m_Name: SceneSynthesizer
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &509809467
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 509809466}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3b67a53b2acb2594ebd86570e51f9cc5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  objectPrefabs: []
+  holesDifficulty: 1
+  lightingDifficulty: 1
+  occlusionDifficulty: 1
+  sceneJsonPath: Assets/Resources/Data/KitchenScene.json
+  outputPath: Assets/Resources/Data/optimized0.json
+  resourcesFolder: Objects/Kitchen
+  temperature: 1
+  coolingRate: 0.99
+  maxIterations: 4000
+  lambdaHoles: 1
+  lambdaLighting: 1
+  lambdaOcclusion: 1
+  lambdaCount: 0.2
+  lambdaIntersection: 1
+  lambdaBounds: 0.5
+  maxObjects: 25
+  minObjects: 4
+  numLights: 5
+  mode: 1
+--- !u!4 &509809468
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 509809466}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -7.18469, y: 0, z: -6.10868}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &832575517
 GameObject:
   m_ObjectHideFlags: 0
@@ -531,68 +595,6 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
---- !u!1 &1338955234
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1338955236}
-  - component: {fileID: 1338955235}
-  m_Layer: 0
-  m_Name: SceneSynthesizer
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1338955235
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1338955234}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 3b67a53b2acb2594ebd86570e51f9cc5, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  objectPrefabs:
-  - {fileID: 919132149155446097, guid: 9aa0daa946d4d7049b5cb5d55c2092cf, type: 3}
-  - {fileID: 919132149155446097, guid: deb125d7ddc89a640aec882671dac739, type: 3}
-  holesDifficulty: 1
-  lightingDifficulty: 1
-  occlusionDifficulty: 10
-  temperature: 1
-  coolingRate: 0.99
-  maxIterations: 4000
-  lambdaHoles: 1
-  lambdaLighting: 1
-  lambdaOcclusion: 1
-  lambdaCount: 0.2
-  lambdaIntersection: 1
-  lambdaBounds: 0.5
-  maxObjects: 25
-  minObjects: 4
-  numLights: 5
---- !u!4 &1338955236
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1338955234}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.52244, y: 0, z: -3.0048}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1451908976
 GameObject:
   m_ObjectHideFlags: 0
@@ -1009,4 +1011,4 @@ SceneRoots:
   - {fileID: 832575519}
   - {fileID: 1451908980}
   - {fileID: 1041500657}
-  - {fileID: 1338955236}
+  - {fileID: 509809468}

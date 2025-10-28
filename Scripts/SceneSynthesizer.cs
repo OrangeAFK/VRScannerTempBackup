@@ -1,7 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System.Linq;
-using UnityEditor;
+using System.IO;
 
 // TODO: create random scene (ideally starting with biased number of objects) and bias the running normalizers
 // create mutation states
@@ -13,10 +13,17 @@ public class SceneSynthesizer : MonoBehaviour
     [Header("User Pain Points (1-10)")]
     [Range(1, 10)] public int holesDifficulty, lightingDifficulty, occlusionDifficulty;
 
+    [Header("JSON Settings")]
+    public string sceneJsonPath = "Assets/Resources/Data/KitchenScene.json";
+    public string outputPath = "Assets/Resources/Data/optimized.json";
+    public string resourcesFolder = "Objects/Kitchen";
+    
+
+
     [Header("Annealing Settings")]
     public float temperature = 1.0f;
     public float coolingRate = 0.99f;
-    public int maxIterations = 4000;
+    public int maxIterations = 4000; 
 
     [Header("Cost Term Weights")]
     public float lambdaHoles = 1f;
@@ -31,14 +38,126 @@ public class SceneSynthesizer : MonoBehaviour
     public int minObjects = 4;
     public int numLights = 5;
 
+    public enum OptimizeMode { Auto, Manual }
+    [Header("Optimizer Mode")]
+    public OptimizeMode mode = OptimizeMode.Auto;
+
+
     private SceneState currentState;
     private float currentCost;
     private List<float> costHistory = new List<float>();
     private int iteration = 0;
     private bool optimizationComplete = false;
 
+    private Dictionary<string, GameObject> prefabLookup = new();
+
+
     void Start()
     {
+        objectPrefabs = Resources.LoadAll<GameObject>(resourcesFolder).ToList();
+        Debug.Log($"Loaded {objectPrefabs.Count} prefabs from Resources/{resourcesFolder}");
+
+        prefabLookup.Clear();
+        foreach (var p in objectPrefabs) {
+            prefabLookup[p.name.ToLower()] = p;
+        }
+
+        LoadSceneJSON();
+        
+
+        if (mode == OptimizeMode.Auto)
+            StartCoroutine(OptimizerCoroutine());
+    }
+
+    void LoadSceneJSON() {
+        if(!File.Exists(sceneJsonPath)) { Debug.LogError("Scene JSON not found."); return; }
+
+        string json = File.ReadAllText(sceneJsonPath);
+        SceneData sceneData = JsonUtility.FromJson<SceneData>(json);
+        
+        currentState = ScriptableObject.CreateInstance<SceneState>();
+        currentState.objects = new List<GameObject>();
+        currentState.lights = new List<GameObject>();
+
+        // objects
+        foreach (var o in sceneData.objects)
+        {
+            string key = o.name.ToLower();
+            if (!prefabLookup.TryGetValue(key, out GameObject prefab))
+            {
+                Debug.LogWarning($"Prefab not found for: {o.name}");
+                continue;
+            }
+
+            GameObject obj = Instantiate(prefab);
+            obj.name = o.name;
+            obj.transform.position = o.position;
+            obj.transform.eulerAngles = o.rotation;
+            obj.transform.localScale = o.scale;
+            
+
+            currentState.objects.Add(obj);
+        }
+
+        // lights
+        foreach (var l in sceneData.lights)
+        {
+            GameObject lightObj = new GameObject("Light");
+            Light light = lightObj.AddComponent<Light>();
+            light.type = LightType.Point;
+            light.range = 10f;
+            light.intensity = l.intensity;
+            lightObj.transform.position = l.position;
+            currentState.lights.Add(lightObj);
+        }
+
+        currentCost = ComputeCost(currentState);
+        Debug.Log($"Scene loaded. Objects: {currentState.objects.Count}, Lights: {currentState.lights.Count}");
+    }
+
+    void SaveJSON() {
+        SceneData data = new SceneData();
+        data.sceneName = "Optimized Scene";
+        data.objects = new List<ObjectData>();
+        data.lights = new List<LightData>();
+
+        // save objects
+        foreach (var obj in currentState.objects)
+        {
+            if (obj == null) continue;
+            
+            ObjectData od = new ObjectData();
+            od.name = obj.name;  // must match prefab name for re-loading
+            od.position = obj.transform.position;
+            od.rotation = obj.transform.eulerAngles;
+            od.scale = obj.transform.localScale;
+
+            data.objects.Add(od);
+        }
+
+        foreach (var l in currentState.lights)
+        {
+            if (l == null) continue;
+            
+            Light light = l.GetComponent<Light>();
+            if (light == null) continue;
+
+            LightData ld = new LightData();
+            ld.position = l.transform.position;
+            ld.intensity = light.intensity;
+
+            data.lights.Add(ld);
+        }
+
+        string json = JsonUtility.ToJson(data, true); // pretty-print
+        File.WriteAllText(outputPath, json);
+
+        Debug.Log($"✅ Scene saved to JSON: {outputPath}");
+
+    }
+
+    // archived random scenestart
+    private void RandomInit() {
         int targetObjects = Mathf.RoundToInt(Mathf.Lerp(minObjects, maxObjects, occlusionDifficulty / 10f));
         Debug.Log($"t: {targetObjects}");
 
@@ -60,22 +179,26 @@ public class SceneSynthesizer : MonoBehaviour
             currentState.objects.Add(obj);
         }
         // initialize lights
-        currentState.lights = new List<PlacedLight>();
+        currentState.lights = new List<GameObject>();
         for (int i = 0; i < numLights; i++)
         {
-            PlacedLight light = new PlacedLight(
-                new Vector3(
-                    Random.Range(SceneState.roomBounds.min.x, SceneState.roomBounds.max.x),
-                    Random.Range(SceneState.roomBounds.min.y + 0.5f, SceneState.roomBounds.max.y - 0.5f),
-                    Random.Range(SceneState.roomBounds.min.z, SceneState.roomBounds.max.z)
-                ),
-                Random.Range(0.5f, 2.0f) // reasonable intensity
+            GameObject lightObj = new GameObject("Light" + i);
+            Light light = lightObj.AddComponent<Light>();
+            light.type = LightType.Point;
+            light.range = 10f;
+            light.intensity = Random.Range(0.5f, 2f);
+
+            lightObj.transform.position = new Vector3(
+                Random.Range(SceneState.roomBounds.min.x, SceneState.roomBounds.max.x),
+                Random.Range(SceneState.roomBounds.min.y + 0.5f, SceneState.roomBounds.max.y - 0.5f),
+                Random.Range(SceneState.roomBounds.min.z, SceneState.roomBounds.max.z)
             );
-            currentState.lights.Add(light);
+
+            currentState.lights.Add(lightObj);
         }
+
         
         currentCost = ComputeCost(currentState);
-        StartCoroutine(OptimizerCoroutine());
     }
 
     System.Collections.IEnumerator OptimizerCoroutine()
@@ -94,13 +217,18 @@ public class SceneSynthesizer : MonoBehaviour
         {
             Debug.Log("Reached max iterations.");
         }
+
+        SaveJSON();
     }
 
     public void OptimizeStep()
     {
         // --- Create proposal ---
         var mutation = new Mutation(currentState, objectPrefabs, maxObjects, minObjects);
+        var initObj = FindObjectsOfType<GameObject>().Length;
         mutation.ApplyRandom();
+        var nowObj = FindObjectsOfType<GameObject>().Length;
+        bool added = (nowObj > initObj);
 
         // --- Evaluate proposal ---
         float proposalCost = ComputeCost(currentState);
@@ -111,6 +239,13 @@ public class SceneSynthesizer : MonoBehaviour
         {
             // accept
             currentCost = proposalCost;
+
+            // destroy the removed object (if any)
+            if (mutation.removedObject != null)
+            {
+                Destroy(mutation.removedObject);
+                mutation.removedObject = null;
+            }
         }
         else
         {
@@ -187,18 +322,14 @@ public class SceneSynthesizer : MonoBehaviour
         SceneState state;
         List<GameObject> objectPrefabs;
 
-        struct ObjectBackup { public GameObject obj; public Vector3 pos; public Quaternion rot; }
-        List<ObjectBackup> mutatedObjects = new();
-        GameObject addedObject = null;
+        public struct ObjectBackup { public GameObject obj; public Vector3 pos; public Vector3 scale; public Quaternion rot; public float intensity; }
+        public List<ObjectBackup> gameObjMutations = new();
+        public GameObject addedObject = null;
         int removedIndex = -1;
-        GameObject removedObject = null;
+        public GameObject removedObject = null;
         int swapIndexA = -1, swapIndexB = -1;
 
         int maxObjects, minObjects;
-
-        // Light mutation backup
-        int mutatedLightIndex = -1;
-        PlacedLight lightBackup;
 
         public Mutation(SceneState s, List<GameObject> prefabs, int maxObjs, int minObjs)
         {
@@ -237,7 +368,7 @@ public class SceneSynthesizer : MonoBehaviour
                 if (state.objects.Count == 0) return;
                 int idx = Random.Range(0, state.objects.Count);
                 var obj = state.objects[idx];
-                mutatedObjects.Add(new ObjectBackup { obj = obj, pos = obj.transform.position, rot = obj.transform.rotation });
+                gameObjMutations.Add(new ObjectBackup { obj = obj, pos = obj.transform.position, rot = obj.transform.rotation, scale=obj.transform.localScale });
 
                 float choice = Random.value;
                 if (choice < 0.5f) // position nudge
@@ -269,40 +400,41 @@ public class SceneSynthesizer : MonoBehaviour
             {
                 if (state.lights.Count == 0) return;
                 int idx = Random.Range(0, state.lights.Count);
-                mutatedLightIndex = idx;
-                lightBackup = state.lights[idx];
+                var lightObj = state.lights[idx];
+                var light = lightObj.GetComponent<Light>();
+                gameObjMutations.Add(new ObjectBackup { obj = lightObj, pos = lightObj.transform.position, intensity = light.intensity });
 
-                var light = state.lights[idx];
                 Vector3 nudge = new Vector3(Random.Range(-1f, 1f), Random.Range(-0.5f, 0.5f), Random.Range(-1f, 1f));
-                light.position += nudge;
-                light.position = new Vector3(
-                    Mathf.Clamp(light.position.x, SceneState.roomBounds.min.x, SceneState.roomBounds.max.x),
-                    Mathf.Clamp(light.position.y, SceneState.roomBounds.min.y + 0.5f, SceneState.roomBounds.max.y - 0.5f),
-                    Mathf.Clamp(light.position.z, SceneState.roomBounds.min.z, SceneState.roomBounds.max.z)
+                lightObj.transform.position += nudge;
+                lightObj.transform.position = new Vector3(
+                    Mathf.Clamp(lightObj.transform.position.x, SceneState.roomBounds.min.x, SceneState.roomBounds.max.x),
+                    Mathf.Clamp(lightObj.transform.position.y, SceneState.roomBounds.min.y + 0.5f, SceneState.roomBounds.max.y - 0.5f),
+                    Mathf.Clamp(lightObj.transform.position.z, SceneState.roomBounds.min.z, SceneState.roomBounds.max.z)
                 );
                 light.intensity = Mathf.Clamp(light.intensity + Random.Range(-0.2f, 0.2f), 0.05f, 5f);
-                state.lights[idx] = light;
             }
         }
 
         public void Revert()
         {
-            // Revert mutated objects
-            foreach (var backup in mutatedObjects)
+            // Revert mutated objects and lights
+            foreach (var backup in gameObjMutations)
             {
                 if (backup.obj != null)
                 {
                     backup.obj.transform.position = backup.pos;
-                    backup.obj.transform.rotation = backup.rot;
+                    if(backup.rot != null) { backup.obj.transform.rotation = backup.rot; } // obj
+                    else { backup.obj.GetComponent<Light>().intensity = backup.intensity; } // light
                 }
             }
-            mutatedObjects.Clear();
+            gameObjMutations.Clear();
 
             // Revert added object
             if (addedObject != null)
             {
-                state.objects.Remove(addedObject);
+                Debug.Log("reverted!");
                 Object.Destroy(addedObject);
+                state.objects.Remove(addedObject);
                 addedObject = null;
             }
 
@@ -322,13 +454,42 @@ public class SceneSynthesizer : MonoBehaviour
                 state.objects[swapIndexB] = tmp;
                 swapIndexA = swapIndexB = -1;
             }
+        }
+    }
 
-            // Revert mutated light
-            if (mutatedLightIndex >= 0)
+    void Update()
+    {
+        if (mode == OptimizeMode.Manual)
+        {
+            if (Input.GetKeyDown(KeyCode.F))
             {
-                state.lights[mutatedLightIndex] = lightBackup;
-                mutatedLightIndex = -1;
+                OptimizeStep();
+                Debug.Log($"Manual Step {iteration}, Cost = {currentCost:F4}");
             }
         }
     }
+}
+
+[System.Serializable]
+public class SceneData
+{
+    public string sceneName;
+    public List<ObjectData> objects;
+    public List<LightData> lights;
+}
+
+[System.Serializable]
+public class ObjectData
+{
+    public string name;
+    public Vector3 position;
+    public Vector3 rotation;
+    public Vector3 scale;
+}
+
+[System.Serializable]
+public class LightData
+{
+    public Vector3 position;
+    public float intensity;
 }
