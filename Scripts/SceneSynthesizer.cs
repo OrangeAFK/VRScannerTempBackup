@@ -3,12 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 
-// TODO: create random scene (ideally starting with biased number of objects) and bias the running normalizers
-// create mutation states
 
 public class SceneSynthesizer : MonoBehaviour
 {
     public List<GameObject> objectPrefabs;
+    private Dictionary<GameObject, SupportRecord> supportRecords = new();
+    private float maxSupportAngle = 15.0f;
+    private float maxSupportJumpDist = 2.5f;
 
     [Header("User Pain Points (1-10)")]
     [Range(1, 10)] public int holesDifficulty, lightingDifficulty, occlusionDifficulty;
@@ -203,6 +204,7 @@ public class SceneSynthesizer : MonoBehaviour
 
     System.Collections.IEnumerator OptimizerCoroutine()
     {
+        Debug.Log("OptimizerCoroutine Started");
         while (!optimizationComplete && iteration < maxIterations)
         {
             OptimizeStep();
@@ -223,12 +225,14 @@ public class SceneSynthesizer : MonoBehaviour
 
     public void OptimizeStep()
     {
+        Debug.Log("Creating proposal...");
         // --- Create proposal ---
-        var mutation = new Mutation(currentState, objectPrefabs, maxObjects, minObjects);
+        var mutation = new Mutation(currentState, objectPrefabs, maxObjects, minObjects, this);
         var initObj = FindObjectsOfType<GameObject>().Length;
         mutation.ApplyRandom();
         var nowObj = FindObjectsOfType<GameObject>().Length;
         bool added = (nowObj > initObj);
+        Debug.Log($"initObj: {initObj}, nowObj: {nowObj}");
 
         // --- Evaluate proposal ---
         float proposalCost = ComputeCost(currentState);
@@ -246,6 +250,8 @@ public class SceneSynthesizer : MonoBehaviour
                 Destroy(mutation.removedObject);
                 mutation.removedObject = null;
             }
+
+            InferSupports();
         }
         else
         {
@@ -330,13 +336,16 @@ public class SceneSynthesizer : MonoBehaviour
         int swapIndexA = -1, swapIndexB = -1;
 
         int maxObjects, minObjects;
+        
+        SceneSynthesizer owner;
 
-        public Mutation(SceneState s, List<GameObject> prefabs, int maxObjs, int minObjs)
+        public Mutation(SceneState s, List<GameObject> prefabs, int maxObjs, int minObjs, SceneSynthesizer ownerRef)
         {
             state = s;
             objectPrefabs = prefabs;
             maxObjects = maxObjs;
             minObjects = minObjs;
+            owner = ownerRef;
         }
 
         public void ApplyRandom()
@@ -369,6 +378,10 @@ public class SceneSynthesizer : MonoBehaviour
                 int idx = Random.Range(0, state.objects.Count);
                 var obj = state.objects[idx];
                 gameObjMutations.Add(new ObjectBackup { obj = obj, pos = obj.transform.position, rot = obj.transform.rotation, scale=obj.transform.localScale });
+
+                if(owner.supportRecords.TryGetValue(obj, out var rec) && rec.needsSupport) {
+                    owner.MutateSupportedObjectPosition(obj);
+                }
 
                 float choice = Random.value;
                 if (choice < 0.5f) // position nudge
@@ -467,6 +480,174 @@ public class SceneSynthesizer : MonoBehaviour
                 Debug.Log($"Manual Step {iteration}, Cost = {currentCost:F4}");
             }
         }
+    }
+
+    // methods for the single relative placement realism term
+    void InferSupports() {
+        supportRecords.Clear();
+
+        GameObject findSupport(GameObject obj) {
+            Collider col = obj.GetComponent<Collider>();
+            Vector3 origin = col.bounds.center - new Vector3(0f, col.bounds.extents.y + 0.001f, 0f);
+            if(Physics.Raycast(origin, Vector3.down, out RaycastHit hit, 2.0f)) {
+                GameObject hitObj = hit.collider.gameObject;
+                if(currentState.objects.Contains(hitObj)) return hitObj;
+            }
+            return null;
+        }
+
+        foreach(var obj in currentState.objects)
+        {
+            if(obj == null) continue;
+
+            // Ensure every object has a collider for support calculations
+            var col = obj.GetComponent<Collider>();
+            if (col == null)
+            {
+                col = obj.AddComponent<BoxCollider>();
+                col.isTrigger = true; // optional: prevents physics interference
+                Debug.Log($"[InferSupports] Added BoxCollider to {obj.name}");
+            }
+
+            GameObject sup = findSupport(obj); // raycast as before
+            supportRecords[obj] = new SupportRecord(sup);
+        }
+
+    }
+    bool IsFlatEnough(GameObject support) {
+        if(support == null) return false;
+        var mf = support.GetComponent<MeshFilter>();
+        if(mf != null && mf.sharedMesh != null) {
+            var normals = mf.sharedMesh.normals;
+            if(normals != null && normals.Length > 0) {
+                int samples = Mathf.Min(8, normals.Length);
+                float sumY = 0f;
+                for (int i = 0; i < samples; i++)
+                {
+                    int idx = (i * normals.Length) / samples;
+                    Vector3 worldNormal = support.transform.TransformDirection(normals[idx]);
+                    sumY += worldNormal.y;
+                }
+                float avgY = sumY / samples;
+                return avgY > Mathf.Cos(maxSupportAngle * Mathf.Deg2Rad); // near up
+            }
+        }
+
+        // fallback to simple face normal check
+        return Vector3.Dot(support.transform.up, Vector3.up) > Mathf.Cos(maxSupportAngle * Mathf.Deg2Rad);
+    }
+    float TopYOfSupport(GameObject support) {
+        // try collider first
+        var col = support.GetComponent<Collider>();
+        if (col != null) return col.bounds.max.y;
+        // fallback to mesh bounds in world coords
+        var mf = support.GetComponent<MeshFilter>();
+        if (mf != null && mf.sharedMesh != null)
+        {
+            var b = mf.sharedMesh.bounds;
+            Vector3 worldMax = support.transform.TransformPoint(b.max);
+            return worldMax.y;
+        }
+        return support.transform.position.y;
+    }
+    bool IsValidSupportFor(GameObject supported, GameObject candidate) {
+        if (candidate == null || supported == null) return false;
+        if (candidate == supported) return false;
+        if (!IsFlatEnough(candidate)) return false;
+
+        float supportTop = TopYOfSupport(candidate);
+
+        // TODO: examine these lines. they're sus
+        var sCol = supported.GetComponent<Collider>();
+        float supportedBottom = (sCol != null) ? (supported.transform.position.y - sCol.bounds.extents.y) : supported.transform.position.y;   
+        if (supportTop < supportedBottom - 0.02f) return false;
+
+        // footprint check
+        var cCol = candidate.GetComponent<Collider>();
+        if (cCol != null && sCol != null)
+        {
+            Vector2 cExt = new Vector2(cCol.bounds.size.x, cCol.bounds.size.z);
+            Vector2 sExt = new Vector2(sCol.bounds.size.x, sCol.bounds.size.z);
+            // require candidate has at least 60% of footprint in each axis (heuristic)
+            if (cExt.x < sExt.x * 0.6f || cExt.y < sExt.y * 0.6f) return false;
+        }
+
+        // reachable horizontally?
+        float horiz = Vector3.Distance(new Vector3(supported.transform.position.x, 0, supported.transform.position.z),
+                                    new Vector3(candidate.transform.position.x, 0, candidate.transform.position.z));
+        if (horiz > maxSupportJumpDist) return false;
+
+        return true;
+    }
+    List<GameObject> CandidateSupportsFor(GameObject obj) {
+        var outlist = new List<GameObject>();
+        foreach(var cand in currentState.objects) {
+            if(cand==null || cand==obj) continue;
+            if(IsValidSupportFor(obj, cand)) outlist.Add(cand);
+        }
+        return outlist;
+    }
+    void SnapToSupport(GameObject obj, GameObject support) {
+        if(obj == null || support == null) return;
+
+        float topY = TopYOfSupport(support);
+        var sCol = obj.GetComponent<Collider>();
+        float halfHeight = sCol.bounds.extents.y;
+        Vector3 newPos = obj.transform.position;
+        newPos.x = support.transform.position.x + Random.Range(-0.2f, 0.2f);
+        newPos.z = support.transform.position.z + Random.Range(-0.2f, 0.2f);
+        newPos.y = topY + halfHeight + 0.001f;
+        obj.transform.position = newPos;        
+
+        // update runtime record
+        if(supportRecords.TryGetValue(obj, out var rec)) {
+            rec.currentSupport = support;
+            supportRecords[obj] = rec;
+        }
+    }
+
+    // call this from ApplyRandom when you pick a supported object mutation
+    public void MutateSupportedObjectPosition(GameObject obj)
+    {
+        if (obj == null) return;
+        var candidates = CandidateSupportsFor(obj);
+        // include current support as low-weight option (so it might stay)
+        if (supportRecords.TryGetValue(obj, out var rec) && rec.currentSupport != null && !candidates.Contains(rec.currentSupport))
+            candidates.Add(rec.currentSupport);
+
+        if (candidates.Count == 0) return;
+
+        // weight by inverse horizontal distance
+        float total = 0f;
+        var weights = new List<float>();
+        foreach (var c in candidates)
+        {
+            float d = Vector3.Distance(new Vector3(obj.transform.position.x,0,obj.transform.position.z),
+                                    new Vector3(c.transform.position.x,0,c.transform.position.z));
+            float w = 1f / (1f + d);
+            weights.Add(w);
+            total += w;
+        }
+        float r = Random.value * total;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            r -= weights[i];
+            if (r <= 0f || i == candidates.Count - 1)
+            {
+                SnapToSupport(obj, candidates[i]);
+                break;
+            }
+        }
+    }
+
+}
+
+public class SupportRecord {
+    public GameObject currentSupport;
+    public bool needsSupport;
+    public SupportRecord(GameObject initSup) {
+        currentSupport = initSup;
+        needsSupport = initSup != null;
     }
 }
 

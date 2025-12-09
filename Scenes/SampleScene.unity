@@ -286,7 +286,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   objectPrefabs: []
-  holesDifficulty: 1
+  holesDifficulty: 10
   lightingDifficulty: 1
   occlusionDifficulty: 1
   sceneJsonPath: Assets/Resources/Data/KitchenScene.json
@@ -304,7 +304,7 @@ MonoBehaviour:
   maxObjects: 25
   minObjects: 4
   numLights: 5
-  mode: 1
+  mode: 0
 --- !u!4 &509809468
 Transform:
   m_ObjectHideFlags: 0
